@@ -227,13 +227,36 @@ def configure_flutterfire_and_env(config):
     print("✅ .env file successfully created at the root of the project.")
 
 def configure_localization(config):
-    """Sets up the initial localization files for the Flutter app."""
+    """Sets up the initial localization files and updates pubspec.yaml."""
     print("\n--- 🌍 Setting up Localization ---")
+    
+    # 1. Create l10n.yaml
     with open(os.path.join(config['mobile_dir'], "l10n.yaml"), "w") as f:
         f.write("arb-dir: lib/l10n\ntemplate-arb-file: app_en.arb\noutput-localization-file: app_localizations.dart\n")
+        
+    # 2. Create the translation directory and base arb file
     os.makedirs(os.path.join(config['mobile_dir'], "lib", "l10n"), exist_ok=True)
     with open(os.path.join(config['mobile_dir'], "lib", "l10n", "app_en.arb"), "w") as f:
         f.write('{\n  "helloWorld": "Hello World!"\n}')
+
+    # 3. Add dependencies via Flutter CLI
+    print("Adding localization dependencies...")
+    run_cmd("flutter pub add intl", cwd=config['mobile_dir'], quiet=True)
+    run_cmd("flutter pub add flutter_localizations --sdk=flutter", cwd=config['mobile_dir'], quiet=True)
+
+    # 4. Inject generate: true into pubspec.yaml
+    pubspec_path = os.path.join(config['mobile_dir'], "pubspec.yaml")
+    with open(pubspec_path, "r") as f:
+        pubspec_content = f.read()
+    
+    # Safely insert generate: true under the flutter: block
+    if "generate: true" not in pubspec_content:
+        pubspec_content = pubspec_content.replace(
+            "\nflutter:\n", 
+            "\nflutter:\n  generate: true\n"
+        )
+        with open(pubspec_path, "w") as f:
+            f.write(pubspec_content)
 
 def initialize_git_repo(config):
     """Initializes Git, applies .gitignore, and handles remote pushing."""
