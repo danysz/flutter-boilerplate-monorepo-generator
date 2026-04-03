@@ -80,7 +80,7 @@ def ask(question, options=None, default=None):
 def get_valid_app_name():
     """Ensures the app name matches Flutter's strict package naming requirements."""
     while True:
-        name = ask("What is the name of your Flutter project? (e.g., danysz_flutter)")
+        name = ask("What is the name of your Flutter project? (e.g., daniels_flutter)")
         if not re.match(r'^[a-z][a-z0-9_]*$', name):
             valid_name = re.sub(r'[^a-z0-9_]', '', name.lower().replace("-", "_"))
             if not valid_name or not valid_name[0].isalpha():
@@ -99,7 +99,11 @@ def gather_configuration():
     """Gathers all necessary inputs from the user to build the configuration state."""
     config = {}
     config['app_name'] = get_valid_app_name()
-    config['org_domain'] = ask("What is your organization domain?", default="com.danyszflutter")
+    config['org_domain'] = ask("What is your organization domain?", default="com.danielsflutter")
+    
+    # Mono-Repo Setup
+    config['is_mono_repo'] = ask("Are you creating a Mono-Repo (include a separate backend directory)?", ["y", "n"], default="y")
+
     config['fb_base_name'] = ask("What is the base name for your Firebase project?", default=f"{config['app_name'].replace('_', '-')}-app")
     config['env_choice'] = ask("How many Firebase environments?", ["1", "2"])
     config['setup_auth'] = ask("Do you need Google & Apple Sign-In?", ["y", "n"])
@@ -113,9 +117,12 @@ def gather_configuration():
 
     # Core Directories
     config['root_dir'] = os.path.abspath(config['app_name'])
-    config['mobile_dir'] = os.path.join(config['root_dir'], "mobile")
+    config['client_dir'] = os.path.join(config['root_dir'], "client")
     config['keys_dir'] = os.path.join(config['root_dir'], "_keys")
     config['scripts_dir'] = os.path.join(config['root_dir'], "scripts")
+    
+    if config['is_mono_repo'] == 'y':
+        config['backend_dir'] = os.path.join(config['root_dir'], "backend")
     
     return config
 
@@ -126,13 +133,23 @@ def initialize_workspace(config):
     os.makedirs(config['keys_dir'], exist_ok=True)
     os.makedirs(config['scripts_dir'], exist_ok=True)
     
+    if config['is_mono_repo'] == 'y':
+        os.makedirs(config['backend_dir'], exist_ok=True)
+        print("✅ Backend directory created for Mono-Repo structure.")
+    
     inject_automation_scripts(config)
 
-    print("\n--- 🔨 Creating Flutter App (in /mobile) ---")
-    run_cmd(f"flutter create --org {config['org_domain']} --project-name {config['app_name']} mobile", cwd=config['root_dir'])
+    print("\n--- 🔨 Creating Flutter App (in /client) ---")
+    run_cmd(f"flutter create --org {config['org_domain']} --project-name {config['app_name']} client", cwd=config['root_dir'])
     
+    # Safely remove nested .git if flutter create generated it
+    nested_git = os.path.join(config['client_dir'], ".git")
+    if os.path.exists(nested_git):
+        shutil.rmtree(nested_git)
+        print("🧹 Cleaned up nested Git repository in the client directory.")
+
     # Dockerfile
-    with open(os.path.join(config['mobile_dir'], "Dockerfile"), "w") as f:
+    with open(os.path.join(config['client_dir'], "Dockerfile"), "w") as f:
         f.write("""# Stage 1: Build the Flutter Web App
 FROM cirrusci/flutter:stable AS build
 WORKDIR /app
@@ -168,7 +185,7 @@ def generate_security_keys(config):
         
         run_cmd(f"keytool -genkey -v -keystore {keystore_path} -keyalg RSA -keysize 2048 -validity 10000 -alias upload -storepass {key_password} -keypass {key_password} -dname \"CN=Unknown, OU=Unknown, O=Unknown, L=Unknown, ST=Unknown, C=US\"")
 
-        with open(os.path.join(config['mobile_dir'], "android", "key.properties"), "w") as f:
+        with open(os.path.join(config['client_dir'], "android", "key.properties"), "w") as f:
             f.write(f"storePassword={key_password}\nkeyPassword={key_password}\nkeyAlias=upload\nstoreFile=../../_keys/upload-keystore.jks\n")
 
 def configure_flutterfire_and_env(config):
@@ -185,7 +202,7 @@ def configure_flutterfire_and_env(config):
         
         for attempt in range(1, max_retries + 1):
             print(f"Attempt {attempt}/{max_retries}: Running flutterfire configure...")
-            result = run_cmd(f"flutterfire configure --project={config['project_ids'][env]} --yes", cwd=config['mobile_dir'], capture=True, quiet=True)
+            result = run_cmd(f"flutterfire configure --project={config['project_ids'][env]} --yes", cwd=config['client_dir'], capture=True, quiet=True)
             
             if result.returncode == 0:
                 print("✅ FlutterFire configuration successful!")
@@ -230,26 +247,21 @@ def configure_localization(config):
     """Sets up the initial localization files and updates pubspec.yaml."""
     print("\n--- 🌍 Setting up Localization ---")
     
-    # 1. Create l10n.yaml
-    with open(os.path.join(config['mobile_dir'], "l10n.yaml"), "w") as f:
+    with open(os.path.join(config['client_dir'], "l10n.yaml"), "w") as f:
         f.write("arb-dir: lib/l10n\ntemplate-arb-file: app_en.arb\noutput-localization-file: app_localizations.dart\n")
         
-    # 2. Create the translation directory and base arb file
-    os.makedirs(os.path.join(config['mobile_dir'], "lib", "l10n"), exist_ok=True)
-    with open(os.path.join(config['mobile_dir'], "lib", "l10n", "app_en.arb"), "w") as f:
+    os.makedirs(os.path.join(config['client_dir'], "lib", "l10n"), exist_ok=True)
+    with open(os.path.join(config['client_dir'], "lib", "l10n", "app_en.arb"), "w") as f:
         f.write('{\n  "helloWorld": "Hello World!"\n}')
 
-    # 3. Add dependencies via Flutter CLI
     print("Adding localization dependencies...")
-    run_cmd("flutter pub add intl", cwd=config['mobile_dir'], quiet=True)
-    run_cmd("flutter pub add flutter_localizations --sdk=flutter", cwd=config['mobile_dir'], quiet=True)
+    run_cmd("flutter pub add intl", cwd=config['client_dir'], quiet=True)
+    run_cmd("flutter pub add flutter_localizations --sdk=flutter", cwd=config['client_dir'], quiet=True)
 
-    # 4. Inject generate: true into pubspec.yaml
-    pubspec_path = os.path.join(config['mobile_dir'], "pubspec.yaml")
+    pubspec_path = os.path.join(config['client_dir'], "pubspec.yaml")
     with open(pubspec_path, "r") as f:
         pubspec_content = f.read()
     
-    # Safely insert generate: true under the flutter: block
     if "generate: true" not in pubspec_content:
         pubspec_content = pubspec_content.replace(
             "\nflutter:\n", 
@@ -259,7 +271,7 @@ def configure_localization(config):
             f.write(pubspec_content)
 
 def initialize_git_repo(config):
-    """Initializes Git, applies .gitignore, and handles remote pushing."""
+    """Initializes Git at the ROOT directory, applies .gitignore, and handles remote pushing."""
     print("\n--- 🐙 Initializing Git & Pushing to Remote ---")
     run_cmd("git init", cwd=config['root_dir'])
 
@@ -275,7 +287,7 @@ Thumbs.db
         f.write(gitignore_content)
     
     run_cmd("git add .", cwd=config['root_dir'])
-    run_cmd('git commit -m "chore: initial commit from Danysz Flutter mono-repo generator"', cwd=config['root_dir'])
+    run_cmd('git commit -m "chore: initial commit from Daniel\'s Flutter generator"', cwd=config['root_dir'])
     run_cmd("git branch -M main", cwd=config['root_dir'])
 
     if config['git_repo_url']:
@@ -294,7 +306,7 @@ Thumbs.db
 def print_post_install_guide():
     """Prints documentation and portfolio links to the console after generation."""
     print("\n" + "="*60)
-    print(" 🚀 DANYSZ FLUTTER AUTOMATION TOOLKIT - READY!")
+    print(" 🚀 DANIEL'S FLUTTER AUTOMATION TOOLKIT - READY!")
     print("="*60)
     print("\nYour workspace is configured. Here are the tools injected into ./scripts:\n")
     
@@ -316,8 +328,7 @@ def print_post_install_guide():
     print("\n" + "="*60)
     print(" 👤 ABOUT THE CREATOR")
     print("="*60)
-    print("  Built by Danysz.")
-    # TODO: Replace these placeholders with your actual URLs!
+    print("  Built by Daniel.")
     print("  • Documentation & Portfolio : https://[YOUR-USERNAME].github.io")
     print("  • Connect on LinkedIn       : https://linkedin.com/in/[YOUR-PROFILE]")
     print("="*60 + "\n")
@@ -338,8 +349,8 @@ if [[ "$VERSION_TYPE" != "patch" && "$VERSION_TYPE" != "minor" ]]; then
   echo "Usage: ./bump_mobile_version.sh [patch|minor]"
   exit 1
 fi
-echo "Bumping mobile version ($VERSION_TYPE)..."
-PUBSPEC_PATH="mobile/pubspec.yaml"
+echo "Bumping client version ($VERSION_TYPE)..."
+PUBSPEC_PATH="client/pubspec.yaml"
 CURRENT_VERSION_LINE=$(grep "^version:" $PUBSPEC_PATH)
 CURRENT_VERSION_STRING=$(echo $CURRENT_VERSION_LINE | sed 's/version: //')
 BASE_VERSION=$(echo $CURRENT_VERSION_STRING | cut -d+ -f1)
@@ -354,8 +365,8 @@ FORMATTED_PATCH=$(printf "%02d" $PATCH)
 FINAL_VERSION="$MAJOR.$FORMATTED_MINOR.$FORMATTED_PATCH+${MAJOR}${FORMATTED_MINOR}${FORMATTED_PATCH}"
 sed -i '' "s/^version: .*/version: $FINAL_VERSION/" $PUBSPEC_PATH
 git add $PUBSPEC_PATH
-git commit -m "chore: bump mobile version to $FINAL_VERSION"
-echo "Mobile version bumped to $FINAL_VERSION"
+git commit -m "chore: bump client version to $FINAL_VERSION"
+echo "Client version bumped to $FINAL_VERSION"
 """
 
     scripts["deploy_mobile.sh"] = r"""#!/bin/bash
@@ -382,7 +393,7 @@ deploy_env() {
     echo "================================================="
     echo "   Deploying $ENV_NAME environment apps          "
     echo "================================================="
-    cd mobile
+    cd client
     flutter clean && flutter pub get
 
     echo "Building Android APK ($ENV_NAME flavor)..."
@@ -415,7 +426,7 @@ exit 0
     scripts["deploy_web_test.sh"] = r"""#!/bin/bash
 set -e
 git branch -D deploy-web-test 2>/dev/null || true
-git subtree split --prefix mobile -b deploy-web-test
+git subtree split --prefix client -b deploy-web-test
 git push web-test deploy-web-test:main --force
 git branch -D deploy-web-test
 if [[ "$*" != *"--skip-version-bump"* ]]; then ./scripts/bump_mobile_version.sh patch; fi
@@ -436,6 +447,10 @@ keytool -genkey -v -keystore "$KEYSTORE_FILE" -keyalg RSA -keysize 2048 -validit
 set -e
 if ! command -v firebase &> /dev/null; then exit 1; fi
 firebase login --interactive
+if [ ! -d "client/android" ]; then
+    echo "❌ Must be run from the root directory containing the 'client' folder."
+    exit 1
+fi
 extract_sha() {
     if [ -f "$1" ]; then keytool -list -v -keystore "$1" -alias "$2" -storepass "$3" -keypass "$3" 2>/dev/null | grep -A 2 "Certificate fingerprints:" | grep "$4:" | awk '{print $2}'; fi
 }
@@ -445,7 +460,7 @@ extract_sha "$HOME/.android/debug.keystore" "androiddebugkey" "android" "SHA256"
 """
 
     scripts["extract_strings.py"] = r"""import os, re, json
-src_dir, l10n_dir = 'mobile/lib/src', 'mobile/lib/l10n'
+src_dir, l10n_dir = 'client/lib/src', 'client/lib/l10n'
 def to_camel_case(text):
     words = re.sub(r'[^a-zA-Z0-9 ]', '', text).split()
     return words[0].lower() + ''.join(w.capitalize() for w in words[1:]) if words else "emptyStr"
@@ -488,7 +503,7 @@ try:
         if 'invalid_constant' in line:
             parts = [p.strip() for p in line.split('•')]
             if len(parts) >= 4:
-                filepath, line_idx = 'mobile/' + parts[2].split(':')[0], int(parts[2].split(':')[1]) - 1
+                filepath, line_idx = 'client/' + parts[2].split(':')[0], int(parts[2].split(':')[1]) - 1
                 with open(filepath, 'r') as file: file_lines = file.readlines()
                 for offset in range(0, min(5, line_idx + 1)):
                     idx = line_idx - offset
@@ -500,7 +515,7 @@ except Exception as e: print(f"Error fixing analyze: {e}")
 """
 
     scripts["fix_context.py"] = r"""import os, re
-for root, _, files in os.walk('mobile/lib/src/screens'):
+for root, _, files in os.walk('client/lib/src/screens'):
     for f in files:
         if f.endswith('.dart'):
             filepath = os.path.join(root, f)
@@ -514,7 +529,7 @@ for root, _, files in os.walk('mobile/lib/src/screens'):
 
     scripts["run_l10n_pipeline.sh"] = r"""#!/bin/bash
 python3 scripts/extract_strings.py
-(cd mobile && flutter analyze > /tmp/analyze.log || true)
+(cd client && flutter analyze > /tmp/analyze.log || true)
 python3 scripts/fix_analyze.py
 python3 scripts/fix_context.py
 """
@@ -531,7 +546,7 @@ python3 scripts/fix_context.py
 # ==========================================
 
 def main():
-    print("🚀 Welcome to the Danysz Flutter Zero-Touch Mono-Repo Generator!")
+    print("🚀 Welcome to the Daniel's Flutter Zero-Touch Generator!")
     
     check_dependencies()
     check_auth()
@@ -545,7 +560,6 @@ def main():
     configure_localization(config)
     initialize_git_repo(config)
 
-    # Trigger the newly added post-installation guide!
     print_post_install_guide()
 
 if __name__ == "__main__":
