@@ -329,8 +329,8 @@ def print_post_install_guide():
     print(" 👤 ABOUT THE CREATOR")
     print("="*60)
     print("  Built by Daniel.")
-    print("  • Documentation & Portfolio : https://[YOUR-USERNAME].github.io")
-    print("  • Connect on LinkedIn       : https://linkedin.com/in/[YOUR-PROFILE]")
+    print("  • Documentation & Portfolio : https://danysz.github.io")
+    print("  • Connect on LinkedIn       : https://linkedin.com/in/danysz")
     print("="*60 + "\n")
 
 
